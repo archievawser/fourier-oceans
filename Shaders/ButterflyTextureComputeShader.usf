@@ -5,7 +5,10 @@
 
 
 RWTexture2D<float4> ButterflyTexture;
-Buffer<int> BitReversedIndices;
+RWBuffer<int> BitReversedIndices;
+
+
+#define mod(x, y) (x - y * floor(x / y))
 
 
 struct complex
@@ -22,21 +25,43 @@ void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y) 
 					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
 {   
 	float2 x = DTid.xy;
-	float k = fmod(x.y * (float(N) / pow(2, x.x + 1)), N);
-	complex twiddle { cos(2.0 * M_PI * k / float(N)), sin(2.0 * M_PI * k / float(N)) };
+	float k = mod(x.y * (float(N) / pow(2, x.x + 1)), N);
+	complex twiddle = { cos(2.0 * M_PI * k / float(N)), sin(2.0 * M_PI * k / float(N)) };
 
 	int butterflySpan = int(pow(2, x.x));
-	int butterflyWing;
+	int butterflyWing = 0;
 
 	if (mod(x.y, pow(2, x.x + 1)) < pow(2, x.x))
 		butterflyWing = 1;
-	else butterflyWing = 0;
 
 	if (x.x == 0)
 	{
 		if (butterflyWing == 1)
 		{
-			ButterflyTexture[DTid.xy] = float4(twiddle.real, twiddle.i, bit_reversed)
+			ButterflyTexture[int2(x)] = float4(
+				twiddle.real, twiddle.i,
+				BitReversedIndices[x.y], BitReversedIndices[x.y + 1.0]);
+		}
+		else
+		{
+			ButterflyTexture[int2(x)] = float4(
+				twiddle.real, twiddle.i,
+				BitReversedIndices[x.y - 1.0], BitReversedIndices[x.y]);
+		}
+	}
+	else
+	{
+		if (butterflyWing == 1)
+		{
+			ButterflyTexture[int2(x)] = float4(
+				twiddle.real, twiddle.i,
+				x.y, x.y + butterflySpan);
+		}
+		else
+		{
+			ButterflyTexture[int2(x)] = float4(
+				twiddle.real, twiddle.i,
+				x.y - butterflySpan, x.y);
 		}
 	}
 }

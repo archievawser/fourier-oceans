@@ -55,7 +55,7 @@ void ButterflyTextureComputeShaderManager::Dispatch(UTextureRenderTarget2D* targ
 		// Create butterfly texture on GPU
 		FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
 			FIntPoint(log2(N), N),
-			PF_FloatRGBA,
+			PF_A32B32G32R32F,
 			FClearValueBinding(),
 			TexCreate_UAV
 		);
@@ -64,9 +64,9 @@ void ButterflyTextureComputeShaderManager::Dispatch(UTextureRenderTarget2D* targ
 		params.ButterflyTexture = outTextureUAV;
 
 		// Create buffer for bit-reversed indices on GPU
-		FRDGBufferDesc bitReversedIndicesBufferDesc = FRDGBufferDesc::CreateBufferDesc(1, N);
+		FRDGBufferDesc bitReversedIndicesBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(int), N);
 		FRDGBufferRef bitReversedIndicesBufferRef = rdgBuilder.CreateBuffer(bitReversedIndicesBufferDesc, TEXT("Butterfly_Compute_BRI_Buffer"));
-		params.BitReversedIndices = rdgBuilder.CreateUAV({ bitReversedIndicesBufferRef });
+		params.BitReversedIndices = rdgBuilder.CreateUAV({ bitReversedIndicesBufferRef, PF_R32_SINT });
 		rdgBuilder.QueueBufferUpload(bitReversedIndicesBufferRef, byte_rev_table, sizeof(byte_rev_table));
 
 		// Add compute execution step
