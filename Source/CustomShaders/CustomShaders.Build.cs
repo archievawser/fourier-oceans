@@ -13,14 +13,15 @@ public class CustomShaders : ModuleRules
             }
         );
 
-        PrivateDependencyModuleNames.AddRange(
-            new string[]
-            {
-                "CoreUObject",
-                "Engine",
-                "Slate",
-                "SlateCore"
-            }
-        );
+        PrivateDependencyModuleNames.AddRange(new string[]
+        {
+            "Core",
+            "CoreUObject",
+            "Engine",
+            "Renderer",
+            "RenderCore",
+            "RHI",
+            "Projects"
+        });
     }
 }

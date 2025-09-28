@@ -1,0 +1,42 @@
+#include "/Engine/Private/Common.ush"
+
+#define M_PI 3.1415926535897932384626433832795
+#define N 256
+
+
+RWTexture2D<float4> ButterflyTexture;
+Buffer<int> BitReversedIndices;
+
+
+struct complex
+{
+	float real;
+	float i;
+};
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{   
+	float2 x = DTid.xy;
+	float k = fmod(x.y * (float(N) / pow(2, x.x + 1)), N);
+	complex twiddle { cos(2.0 * M_PI * k / float(N)), sin(2.0 * M_PI * k / float(N)) };
+
+	int butterflySpan = int(pow(2, x.x));
+	int butterflyWing;
+
+	if (mod(x.y, pow(2, x.x + 1)) < pow(2, x.x))
+		butterflyWing = 1;
+	else butterflyWing = 0;
+
+	if (x.x == 0)
+	{
+		if (butterflyWing == 1)
+		{
+			ButterflyTexture[DTid.xy] = float4(twiddle.real, twiddle.i, bit_reversed)
+		}
+	}
+}
