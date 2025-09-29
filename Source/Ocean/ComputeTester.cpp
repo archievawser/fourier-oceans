@@ -4,6 +4,7 @@
 #include "ComputeTester.h"
 
 #include "ButterflyTextureComputeShader.h"
+#include "OceanComputeShaderDispatcher.h"
 
 
 // Sets default values
@@ -29,6 +30,7 @@ void AComputeTester::Tick(float DeltaTime)
 
 void AComputeTester::Fire(UTextureRenderTarget2D* t)
 {
-	ButterflyTextureComputeShaderManager::Get()->Dispatch(t);
+	//OceanComputeShaderDispatcher::Get()->DrawButterfly(256, Target);
+	OceanComputeShaderDispatcher::Get()->DrawHeightField(256, Target);
 }
 

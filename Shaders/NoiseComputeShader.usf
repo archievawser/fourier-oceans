@@ -1,0 +1,20 @@
+#include "/Engine/Private/Common.ush"
+
+#define TILE_SIZE 512
+
+
+RWTexture2D<float4> Output;
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{   
+	Output[DTid.xy] = float4(
+		frac(sin(dot(DTid.xy,float2(12.9898,78.233)))*43758.5453123),
+		frac(sin(dot(DTid.xy + float2(TILE_SIZE, 0),float2(12.9898,78.233)))*43758.5453123),
+		frac(sin(dot(DTid.xy + float2(0, TILE_SIZE),float2(12.9898,78.233)))*43758.5453123),
+		frac(sin(dot(DTid.xy + float2(TILE_SIZE, TILE_SIZE),float2(12.9898,78.233)))*43758.5453123));
+}

@@ -1,0 +1,82 @@
+#include "/Engine/Private/Common.ush"
+
+#define M_PI 3.1415926535897932384626433832795
+#define mod(x, y) (x - y * floor(x / y))
+
+RWTexture2D<float4> FourierComponentsY;
+RWTexture2D<float4> FourierComponentsX;
+RWTexture2D<float4> FourierComponentsZ;
+RWTexture2D<float4> PositiveInitialSpectrum;
+RWTexture2D<float4> NegativeInitialSpectrum;
+float N;
+float L;
+float t;
+
+struct complex
+{
+	float real;
+	float i;
+};
+
+complex mul(complex c0, complex c1)
+{
+	complex c;
+	c.real = c0.real * c1.real - c0.i * c1.i;
+	c.i = c0.real * c1.i + c0.i * c1.real;
+	return c;
+}
+
+complex add(complex c0, complex c1)
+{
+	complex c;
+	c.real = c0.real + c1.real;
+	c.i = c0.i + c1.i;
+	return c;
+}
+
+complex conj(complex c)
+{
+	complex c_conj = { c.real, -c.i };
+	return c_conj;
+}
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{
+	float2 x = DTid.xy - N / 2.0;
+	float2 k = float2(2.0 * M_PI * x.x / L, 2.0 * M_PI * x.y / L);
+
+	float magnitude = length(k);
+	if (magnitude < 0.00001) magnitude = 0.00001;
+
+	float w = sqrt(9.81 * magnitude);
+
+	float2 tilde_h0k_values = PositiveInitialSpectrum[DTid.xy].rg;
+	complex fourier_cmp = { tilde_h0k_values.x, tilde_h0k_values.y };
+
+	float2 tilde_h0minusk_values = NegativeInitialSpectrum[DTid.xy].rg;
+	complex tilde_h0minusk_values_complex = { tilde_h0minusk_values.x, tilde_h0minusk_values.y };
+	complex fourier_cmp_conj = conj(tilde_h0minusk_values_complex);
+
+	float cos_w_t = cos(w * t);
+	float sin_w_t = sin(w * t);
+
+	complex exp_iwt = { cos_w_t, sin_w_t };
+	complex exp_iwt_inv = { cos_w_t, -sin_w_t };
+
+	complex h_k_t_dy = add(mul(fourier_cmp, exp_iwt), mul(fourier_cmp_conj, exp_iwt_inv));
+
+	complex dx = { 0.0, -k.x/magnitude };
+	complex h_k_t_dx = mul(dx, h_k_t_dy);
+
+	complex dy = { 0.0, -k.y / magnitude };
+	complex h_k_t_dz = mul(dy, h_k_t_dy);
+
+	FourierComponentsY[DTid.xy] = float4(h_k_t_dy.real, h_k_t_dy.i, 0, 1);
+	FourierComponentsX[DTid.xy] = float4(h_k_t_dx.real, h_k_t_dx.i, 0, 1);
+	FourierComponentsZ[DTid.xy] = float4(h_k_t_dz.real, h_k_t_dz.i, 0, 1);
+}

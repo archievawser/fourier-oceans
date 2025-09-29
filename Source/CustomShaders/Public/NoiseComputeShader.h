@@ -5,21 +5,18 @@
 #include "ShaderParameterStruct.h"
 #include "GlobalShader.h"
 
-
 #define NUM_THREADS_PER_GROUP_DIMENSION 32
 
 
-struct FButterflyTextureComputeShader : public FGlobalShader
+struct FNoiseComputeShader : public FGlobalShader
 {
 public:
-	DECLARE_GLOBAL_SHADER(FButterflyTextureComputeShader);
+	DECLARE_GLOBAL_SHADER(FNoiseComputeShader);
 
-	SHADER_USE_PARAMETER_STRUCT(FButterflyTextureComputeShader, FGlobalShader);
+	SHADER_USE_PARAMETER_STRUCT(FNoiseComputeShader, FGlobalShader);
 	
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, ButterflyTexture)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<int>, BitReversedIndices)
-		SHADER_PARAMETER(float, N)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, Output)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

@@ -1,0 +1,69 @@
+#include "/Engine/Private/Common.ush"
+
+#define M_PI 3.1415926535897932384626433832795
+
+RWTexture2D<float4> PositiveSpectrum;
+RWTexture2D<float4> NegativeSpectrum;
+
+// x: noise_r0, y: noise_i0, z: noise_r1, w: noise_i1 
+RWTexture2D<float4> Noise;
+
+float N;
+float L;
+float A;
+float2 WindDirection;
+float WindSpeed;
+
+#define G 9.81
+
+
+float4 gaussRND(uint3 DTid)
+{
+	float noise00 = clamp(Noise[DTid.xy].x, 0.001, 1.0);
+	float noise01 = clamp(Noise[DTid.xy].y, 0.001, 1.0);
+	float noise02 = clamp(Noise[DTid.xy].z, 0.001, 1.0);
+	float noise03 = clamp(Noise[DTid.xy].w, 0.001, 1.0);
+	
+	float u0 = 2.0 * M_PI * noise00;
+	float v0 = sqrt(-2.0 * log(noise01));
+	float u1 = 2.0 * M_PI * noise02;
+	float v1 = sqrt(-2.0 * log(noise03)); 
+	
+	float4 rnd = float4(v0 * cos(u0), v0 * sin(u0), v1 * cos(u1), v1 * sin(u1));
+	return rnd;
+}
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{   
+	float2 x = float2(DTid.xy) - float2(N / 2.0, N / 2.0);
+	float2 k = float2(2.0 * M_PI / L, 2.0 * M_PI / L) * x;
+
+	float L_ = (WindSpeed * WindSpeed) / G;
+	float mag = length(k);
+	if (mag < 0.00001) mag = 0.00001;
+	float magSq = mag * mag;
+
+	float h0k = clamp(sqrt((A / (magSq * magSq))
+		* pow(abs(dot(normalize(k), normalize(WindDirection))), 6.0)
+		* exp(-(1.0 / (magSq * L_ * L_)))
+		* exp(-magSq * pow(L / 2000.0, 2.0))) / sqrt(2.0),
+		-4000.0,
+		4000.0);
+
+	float h0minusk = clamp(sqrt((A / (magSq * magSq))
+		* pow(abs(dot(normalize(-k), normalize(WindDirection))), 6.0)
+		* exp(-(1.0 / (magSq * L_ * L_)))
+		* exp(-magSq * pow(L / 2000.0, 2.0))) / sqrt(2.0),
+		-4000.0,
+		4000.0);
+
+	float4 gauss_random = gaussRND(DTid);
+
+	PositiveSpectrum[DTid.xy] = float4(gauss_random.xy * h0k, 0, 1);
+	NegativeSpectrum[DTid.xy] = float4(gauss_random.zw * h0minusk, 0, 1);
+}

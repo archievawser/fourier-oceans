@@ -9,17 +9,22 @@
 #define NUM_THREADS_PER_GROUP_DIMENSION 32
 
 
-struct FButterflyTextureComputeShader : public FGlobalShader
+struct FSpectrumComputeShader : public FGlobalShader
 {
 public:
-	DECLARE_GLOBAL_SHADER(FButterflyTextureComputeShader);
+	DECLARE_GLOBAL_SHADER(FSpectrumComputeShader);
 
-	SHADER_USE_PARAMETER_STRUCT(FButterflyTextureComputeShader, FGlobalShader);
+	SHADER_USE_PARAMETER_STRUCT(FSpectrumComputeShader, FGlobalShader);
 	
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, ButterflyTexture)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<int>, BitReversedIndices)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, PositiveSpectrum)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, NegativeSpectrum)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, Noise)
 		SHADER_PARAMETER(float, N)
+		SHADER_PARAMETER(float, L)
+		SHADER_PARAMETER(float, A)
+		SHADER_PARAMETER(FVector2f, WindDirection)
+		SHADER_PARAMETER(float, WindSpeed)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
