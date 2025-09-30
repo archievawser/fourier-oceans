@@ -1,10 +1,12 @@
 #include "OceanComputeShaderDispatcher.h"
 
 #include "ButterflyTextureComputeShader.h"
+#include "FFTComputeShader.h"
 #include "FourierComponentsComputeShader.h"
 #include "NoiseComputeShader.h"
 #include "RenderGraphUtils.h"
-#include "SpectrumComputeShader.h"
+#include "InitialSpectraComputeShader.h"
+#include "InversionComputeShader.h"
 #include "Runtime/Engine/Classes/Engine/TextureRenderTarget2D.h"
 
 
@@ -37,9 +39,12 @@ TArray<int> OceanComputeShaderDispatcher::PrecomputeBitReversedIndices(int N)
 }
 
 
-void OceanComputeShaderDispatcher::DrawButterfly(int N, FOnButterflyTextureDrawn onComplete)
+void OceanComputeShaderDispatcher::ComputeButterfly(int N, FOnButterflyTextureReady onComplete)
 {
-	ENQUEUE_RENDER_COMMAND(WaveComputeCmd)([N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
+	if (mButterflyTextureCache.Contains(N))
+		return (void) onComplete.ExecuteIfBound(mButterflyTextureCache[N]);
+	
+	ENQUEUE_RENDER_COMMAND(WaveComputeCmd)([this, N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
 	{
 		FRDGBuilder rdgBuilder(rhiCmdList);
 		
@@ -85,15 +90,19 @@ void OceanComputeShaderDispatcher::DrawButterfly(int N, FOnButterflyTextureDrawn
 		TRefCountPtr<IPooledRenderTarget> output;
 		rdgBuilder.QueueTextureExtraction(outTextureRef, &output);
 		rdgBuilder.Execute();
-
+		
+		mButterflyTextureCache.Add(N, output);
 		onComplete.ExecuteIfBound(output);
 	});
 }
 
 
-void OceanComputeShaderDispatcher::DrawIndependentSpectra(int N, FOnInitialSpectraDrawn onComplete)
+void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectraReady onComplete)
 {
-	ENQUEUE_RENDER_COMMAND(SpectraComputeCmd)([N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable 
+	if (mButterflyTextureCache.Contains(N))
+		return (void) onComplete.ExecuteIfBound(mInitialSpectraCache[N].first, mInitialSpectraCache[N].second);
+	
+	ENQUEUE_RENDER_COMMAND(SpectraComputeCmd)([this, N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable 
 	{
 		TShaderMapRef<FNoiseComputeShader> noiseComputeShader (GetGlobalShaderMap(GMaxRHIFeatureLevel));
 		FRDGBuilder rdgBuilder(rhiCmdList);
@@ -126,13 +135,13 @@ void OceanComputeShaderDispatcher::DrawIndependentSpectra(int N, FOnInitialSpect
         });
 		
 		// Compute initial spectra
-		TShaderMapRef<FSpectrumComputeShader> spectraComputeShader (GetGlobalShaderMap(GMaxRHIFeatureLevel));
-		FSpectrumComputeShader::FParameters spectraComputeParams;
+		TShaderMapRef<FInitialSpectraComputeShader> spectraComputeShader (GetGlobalShaderMap(GMaxRHIFeatureLevel));
+		FInitialSpectraComputeShader::FParameters spectraComputeParams;
 		spectraComputeParams.N = N;
 		spectraComputeParams.L = 1000;
 		spectraComputeParams.A = 4;
 		spectraComputeParams.WindDirection = FVector2f(1.0f, 1.0f);
-		spectraComputeParams.WindSpeed = 12.0;
+		spectraComputeParams.WindSpeed = 40.0;
 		spectraComputeParams.Noise = outNoiseUAV;
 
 		FRDGTextureRef outNegativeSpectrum = rdgBuilder.CreateTexture(textureDesc, TEXT("NegativeSpectrum_Compute_Out"));
@@ -144,7 +153,7 @@ void OceanComputeShaderDispatcher::DrawIndependentSpectra(int N, FOnInitialSpect
 		spectraComputeParams.PositiveSpectrum = outPositiveSpectrumUAV;
 
 		rdgBuilder.AddPass(
-			RDG_EVENT_NAME("SpectraComputePass"),
+			RDG_EVENT_NAME("InitialSpectraComputePass"),
 			&spectraComputeParams,
 			ERDGPassFlags::Compute,
 			[&](FRHICommandListImmediate& passRhiCmdList)
@@ -163,85 +172,192 @@ void OceanComputeShaderDispatcher::DrawIndependentSpectra(int N, FOnInitialSpect
 		rdgBuilder.QueueTextureExtraction(outPositiveSpectrum, &positiveSpectrumOut);
 		rdgBuilder.Execute();
 
+		mInitialSpectraCache.Add(N, { positiveSpectrumOut, negativeSpectrumOut });
 		onComplete.ExecuteIfBound(positiveSpectrumOut, negativeSpectrumOut);
 	});
 }
 
 
-void OceanComputeShaderDispatcher::DrawHeightField(int N, UTextureRenderTarget2D* target)
+void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierComponentsReady onComplete)
 {
-	FOnInitialSpectraDrawn onInitialSpectraDrawn;
+	FOnInitialSpectraReady onInitialSpectraDrawn;
 
-	onInitialSpectraDrawn.BindLambda([this, N, target](TRefCountPtr<IPooledRenderTarget> positiveSpectrum, TRefCountPtr<IPooledRenderTarget> negativeSpectrum) 
+	onInitialSpectraDrawn.BindLambda([this, N, onComplete](TRefCountPtr<IPooledRenderTarget> positiveSpectrum, TRefCountPtr<IPooledRenderTarget> negativeSpectrum) 
 	{
-		FOnButterflyTextureDrawn onButterflyDrawn;
+		ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, positiveSpectrum, negativeSpectrum, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
+        {
+            FRDGBuilder rdgBuilder(rhiCmdList);
+            	
+            FFourierComponentsComputeShader::FParameters params;
+            params.N = N;
+            params.L = 1000;
 
-		onButterflyDrawn.BindLambda([N, target, positiveSpectrum, negativeSpectrum](TRefCountPtr<IPooledRenderTarget> butterfly)
-		{
-			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, target, positiveSpectrum, negativeSpectrum, butterfly](FRHICommandListImmediate& rhiCmdList) mutable
-            {
-            	FRDGBuilder rdgBuilder(rhiCmdList);
-            		
-            	FFourierComponentsComputeShader::FParameters params;
-            	params.N = N;
-            	params.L = 1000;
-            	params.t = 0.1;
-        
-            	// Create height texture on GPU
-            	FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
-            		FIntPoint(N, N),
-            		PF_A32B32G32R32F,
-            		FClearValueBinding(),
-            		TexCreate_UAV
+			static float t = 0.0f;
+			t += 0.01f;
+            params.t = t;
+    
+            // Create height texture on GPU
+            FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
+            	FIntPoint(N, N),
+            	PF_A32B32G32R32F,
+            	FClearValueBinding(),
+            	TexCreate_UAV
+            );
+            
+            FRDGTextureRef fourierComponentsOut_Y = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_Y_Out"));
+            FRDGTextureUAVRef fourierComponentsOut_Y_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_Y });
+            params.FourierComponentsY = fourierComponentsOut_Y_UAV;
+            
+            FRDGTextureRef fourierComponentsOut_X = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_X_Out"));
+            FRDGTextureUAVRef fourierComponentsOut_X_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_X });
+            params.FourierComponentsX = fourierComponentsOut_X_UAV;
+            
+            FRDGTextureRef fourierComponentsOut_Z = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_Z_Out"));
+            FRDGTextureUAVRef fourierComponentsOut_Z_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_Z });
+            params.FourierComponentsZ = fourierComponentsOut_Z_UAV;
+    
+            FRDGTextureRef positiveSpectrumRef = rdgBuilder.RegisterExternalTexture(positiveSpectrum);
+            params.PositiveInitialSpectrum = rdgBuilder.CreateUAV({ positiveSpectrumRef });
+            
+            FRDGTextureRef negativeSpectrumRef = rdgBuilder.RegisterExternalTexture(negativeSpectrum);
+            params.NegativeInitialSpectrum = rdgBuilder.CreateUAV({ negativeSpectrumRef });
+    
+            // Add compute execution step
+            TShaderMapRef<FFourierComponentsComputeShader> fourierComponentsCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+            	
+            rdgBuilder.AddPass(
+            	RDG_EVENT_NAME("FourierComponentsComputePass"),
+            	&params,
+            	ERDGPassFlags::Compute,
+            	[&](FRHICommandListImmediate& passRhiCmdList)
+            {	
+            	FComputeShaderUtils::Dispatch(passRhiCmdList, fourierComponentsCompute, params,
+            	FIntVector(
+            		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+            		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+            		1)
             	);
-            	
-            	FRDGTextureRef fourierComponentsOut_Y = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_Y_Out"));
-            	FRDGTextureUAVRef fourierComponentsOut_Y_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_Y });
-            	params.FourierComponentsY = fourierComponentsOut_Y_UAV;
-            	
-            	FRDGTextureRef fourierComponentsOut_X = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_X_Out"));
-            	FRDGTextureUAVRef fourierComponentsOut_X_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_X });
-            	params.FourierComponentsX = fourierComponentsOut_X_UAV;
-            	
-            	FRDGTextureRef fourierComponentsOut_Z = rdgBuilder.CreateTexture(textureDesc, TEXT("FourierComponents_Z_Out"));
-            	FRDGTextureUAVRef fourierComponentsOut_Z_UAV = rdgBuilder.CreateUAV({ fourierComponentsOut_Z });
-            	params.FourierComponentsZ = fourierComponentsOut_Z_UAV;
-        
-            	FRDGTextureRef positiveSpectrumRef = rdgBuilder.RegisterExternalTexture(positiveSpectrum);
-            	params.PositiveInitialSpectrum = rdgBuilder.CreateUAV({ positiveSpectrumRef });
-            	
-            	FRDGTextureRef negativeSpectrumRef = rdgBuilder.RegisterExternalTexture(negativeSpectrum);
-            	params.NegativeInitialSpectrum = rdgBuilder.CreateUAV({ negativeSpectrumRef });
-        
-            	// Add compute execution step
-            	TShaderMapRef<FFourierComponentsComputeShader> fourierComponentsCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-            		
-            	rdgBuilder.AddPass(
-            		RDG_EVENT_NAME("FourierComponentsComputePass"),
-            		&params,
-            		ERDGPassFlags::Compute,
-            		[&](FRHICommandListImmediate& passRhiCmdList)
-            	{	
-            		FComputeShaderUtils::Dispatch(passRhiCmdList, fourierComponentsCompute, params,
-            		FIntVector(
-            			FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-            			FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-            			1)
-            		);
-            	});
-            	
-            	TRefCountPtr<IPooledRenderTarget> output;
-            	rdgBuilder.QueueTextureExtraction(fourierComponentsOut_Y, &output);
-            	rdgBuilder.Execute();
-        
-            	rhiCmdList.CopyTexture(output->GetRHI(), target->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
             });
-		});
-		
-		DrawButterfly(N, onButterflyDrawn);
+            
+            TRefCountPtr<IPooledRenderTarget> output;
+            rdgBuilder.QueueTextureExtraction(fourierComponentsOut_Y, &output);
+			
+            rdgBuilder.Execute();
+			onComplete.ExecuteIfBound(output);
+        });
 	});
 
-	DrawIndependentSpectra(N, onInitialSpectraDrawn);
+	ComputeInitialSpectra(N, onInitialSpectraDrawn);
+}
+
+
+void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnFourierComponentsReady onComplete, UTextureRenderTarget2D* debugOutput)
+{
+	FOnFourierComponentsReady onFourierComponentsReady;
+
+	onFourierComponentsReady.BindLambda([this, N, onComplete, debugOutput](TRefCountPtr<IPooledRenderTarget> fourierComponents)
+	{
+		FOnButterflyTextureReady onButterflyTextureReady;
+
+		onButterflyTextureReady.BindLambda([N, fourierComponents, onComplete, debugOutput](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
+		{
+			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, fourierComponents, onComplete, butterflyTexture, debugOutput](FRHICommandListImmediate& rhiCmdList) mutable
+            {
+                FRDGBuilder rdgBuilder(rhiCmdList);
+				TShaderMapRef<FFFTComputeShader> fftCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+        
+                // Create height texture on GPU
+                FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
+                    FIntPoint(N, N),
+                    PF_A32B32G32R32F,
+                    FClearValueBinding(),
+                    TexCreate_UAV
+                );
+        		
+                FRDGTextureRef butterflyRef = rdgBuilder.RegisterExternalTexture(butterflyTexture);
+                FRDGTextureUAVRef butterflyTextureUAV = rdgBuilder.CreateUAV({butterflyRef});
+        		
+                FRDGTextureRef fourierComponentsRef = rdgBuilder.RegisterExternalTexture(fourierComponents);
+                FRDGTextureUAVRef pingpong0UAV = rdgBuilder.CreateUAV({fourierComponentsRef});
+                
+                FRDGTextureRef pingPong1Texture = rdgBuilder.CreateTexture(textureDesc, TEXT("FFT_PingPong1_Out"));
+                FRDGTextureUAVRef pingPong1Texture_UAV = rdgBuilder.CreateUAV({ pingPong1Texture });
+                FRDGTextureUAVRef pingpong1UAV = pingPong1Texture_UAV;
+
+				enum class FFTDirection { Horizontal, Vertical };
+				const int numStages = log2(N);
+				int pingpong = 0;
+
+				TArray<FFFTComputeShader::FParameters*> paramList;
+
+				for (auto direction: { FFTDirection::Horizontal, FFTDirection::Vertical })
+				{
+                    for (int i = 0; i < numStages; i++)
+                    {
+                    	FFFTComputeShader::FParameters* params = rdgBuilder.AllocParameters<FFFTComputeShader::FParameters>();
+                    	params->direction = (int)direction;
+                    	params->pingpong0 = pingpong0UAV;
+                    	params->pingpong1 = pingpong1UAV;
+                    	params->stage = i;
+                    	params->pingpong = pingpong % 2;
+                    	params->butterflyTexture = butterflyTextureUAV;
+                    	pingpong++;
+                    	
+                        // Add compute execution step
+                        rdgBuilder.AddPass(
+                            RDG_EVENT_NAME("FFTComputePass"),
+                            params,
+                            ERDGPassFlags::Compute,
+                            [fftCompute, params, N](FRHICommandListImmediate& passRhiCmdList)
+                        {	
+                    		FComputeShaderUtils::Dispatch(passRhiCmdList, fftCompute, *params,
+                            FIntVector(
+                                FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                1)
+                            );
+                        });
+                    }
+				}
+
+				FRDGTextureRef displacementOut = rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_Out"));
+				FRDGTextureUAVRef displacementOut_UAV = rdgBuilder.CreateUAV({ displacementOut });
+				
+				FInversionComputeShader::FParameters* inversionParams = rdgBuilder.AllocParameters<FInversionComputeShader::FParameters>();
+				inversionParams->pingpong0 = pingpong0UAV;
+				inversionParams->pingpong1 = pingpong1UAV;
+				inversionParams->N = N;
+				inversionParams->pingpong = pingpong % 2;
+				inversionParams->displacement = displacementOut_UAV;
+				
+				TShaderMapRef<FInversionComputeShader> inversionCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
+				rdgBuilder.AddPass(
+					RDG_EVENT_NAME("InversionComputePass"),
+					inversionParams,
+					ERDGPassFlags::Compute,
+					[&](FRHICommandListImmediate& passRhiCmdList)
+				{	
+					FComputeShaderUtils::Dispatch(passRhiCmdList, inversionCompute, *inversionParams,
+					FIntVector(
+						FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+						FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+						1)
+					);
+				});
+                
+                TRefCountPtr<IPooledRenderTarget> output;
+                rdgBuilder.QueueTextureExtraction(displacementOut, &output);
+                rdgBuilder.Execute();
+        		onComplete.ExecuteIfBound(output);
+				
+				rhiCmdList.CopyTexture(output->GetRHI(), debugOutput->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
+            });	
+		});
+		
+		ComputeButterfly(N, onButterflyTextureReady);
+	});
+
+	ComputeFourierComponents(N, onFourierComponentsReady);
 }
 
 

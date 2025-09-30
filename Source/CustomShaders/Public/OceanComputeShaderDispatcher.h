@@ -16,17 +16,23 @@ public:
 		return mSingleton;
 	}
 
-	DECLARE_DELEGATE_OneParam(FOnButterflyTextureDrawn, TRefCountPtr<IPooledRenderTarget>);
-	void DrawButterfly(int N, FOnButterflyTextureDrawn onComplete);
+	DECLARE_DELEGATE_OneParam(FOnButterflyTextureReady, TRefCountPtr<IPooledRenderTarget> butterflyTexture);
+	void ComputeButterfly(int N, FOnButterflyTextureReady onComplete);
 	
-	DECLARE_DELEGATE_TwoParams(FOnInitialSpectraDrawn, TRefCountPtr<IPooledRenderTarget>, TRefCountPtr<IPooledRenderTarget>);
-	void DrawIndependentSpectra(int N, FOnInitialSpectraDrawn onComplete);
+	DECLARE_DELEGATE_TwoParams(FOnInitialSpectraReady, TRefCountPtr<IPooledRenderTarget> positiveSpectrumTexture, TRefCountPtr<IPooledRenderTarget> negativeSpectrumTexture);
+	void ComputeInitialSpectra(int N, FOnInitialSpectraReady onComplete);
 	
-	void DrawHeightField(int N, UTextureRenderTarget2D* target);
+	DECLARE_DELEGATE_OneParam(FOnFourierComponentsReady, TRefCountPtr<IPooledRenderTarget> fourierComponentsTexture);
+	void ComputeFourierComponents(int N, FOnFourierComponentsReady onComplete);
+	
+	DECLARE_DELEGATE_OneParam(FOnDisplacementFieldReady, TRefCountPtr<IPooledRenderTarget> fourierComponentsTexture);
+	void ComputeDisplacement(int N, FOnFourierComponentsReady onComplete, UTextureRenderTarget2D* debugOutput);
 
 private:
 	OceanComputeShaderDispatcher() = default;
 
+	TMap<int, TRefCountPtr<IPooledRenderTarget>> mButterflyTextureCache;
+	TMap<int, std::pair<TRefCountPtr<IPooledRenderTarget>, TRefCountPtr<IPooledRenderTarget>>> mInitialSpectraCache;
 	static TArray<int> PrecomputeBitReversedIndices(int N);
 	static OceanComputeShaderDispatcher* mSingleton;
 };

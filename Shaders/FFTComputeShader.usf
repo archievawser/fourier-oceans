@@ -1,0 +1,117 @@
+#include "/Engine/Private/Common.ush"
+
+#define mod(x, y) (x - y * floor(x / y))
+
+RWTexture2D<float4> butterflyTexture;
+RWTexture2D<float4> pingpong0;
+RWTexture2D<float4> pingpong1;
+int stage;
+int pingpong;
+int direction;
+
+struct complex
+{
+	float real;
+	float i;
+};
+
+complex mul(complex c0, complex c1)
+{
+	complex c;
+	c.real = c0.real * c1.real - c0.i * c1.i;
+	c.i = c0.real * c1.i + c0.i * c1.real;
+	return c;
+}
+
+complex add(complex c0, complex c1)
+{
+	complex c;
+	c.real = c0.real + c1.real;
+	c.i = c0.i + c1.i;
+	return c;
+}
+
+void horizontalButterflies(int3 DTid)
+{
+	complex H;
+	int2 x = DTid.xy;
+
+	if (pingpong == 0)
+	{
+		float4 data = butterflyTexture[int2(stage, x.x)].rgba;
+		float2 p_ = pingpong0[int2(data.z, x.y)].rg;
+		float2 q_ = pingpong0[int2(data.w, x.y)].rg;
+		float2 w_ = float2(data.x, data.y);
+
+		complex p = { p_.x, p_.y };
+		complex q = { q_.x, q_.y };
+		complex w = { w_.x, w_.y };
+
+		H = add(p, mul(w, q));
+
+		pingpong1[x] = float4(H.real, H.i, 0, 1);
+	}
+	else if (pingpong == 1)
+	{
+		float4 data = butterflyTexture[int2(stage, x.x)].rgba;
+		float2 p_ = pingpong1[int2(data.z, x.y)].rg;
+		float2 q_ = pingpong1[int2(data.w, x.y)].rg;
+		float2 w_ = float2(data.x, data.y);
+
+		complex p = { p_.x, p_.y };
+		complex q = { q_.x, q_.y };
+		complex w = { w_.x, w_.y };
+
+		H = add(p, mul(w, q));
+
+		pingpong0[x] = float4(H.real, H.i, 0, 1);
+	}
+}
+
+void verticalButterflies(int3 DTid)
+{
+	complex H;
+	int2 x = DTid.xy;
+
+	if (pingpong == 0)
+	{
+		float4 data = butterflyTexture[int2(stage, x.y)].rgba;
+		float2 p_ = pingpong0[int2(x.x, data.z)].rg;
+		float2 q_ = pingpong0[int2(x.x, data.w)].rg;
+		float2 w_ = float2(data.x, data.y);
+
+		complex p = { p_.x, p_.y };
+		complex q = { q_.x, q_.y };
+		complex w = { w_.x, w_.y };
+
+		H = add(p, mul(w, q));
+
+		pingpong1[x] = float4(H.real, H.i, 0, 1);
+	}
+	else if (pingpong == 1)
+	{
+		float4 data = butterflyTexture[int2(stage, x.y)].rgba;
+		float2 p_ = pingpong1[int2(x.x, data.z)].rg;
+		float2 q_ = pingpong1[int2(x.x, data.w)].rg;
+		float2 w_ = float2(data.x, data.y);
+
+		complex p = { p_.x, p_.y };
+		complex q = { q_.x, q_.y };
+		complex w = { w_.x, w_.y };
+
+		H = add(p, mul(w, q));
+
+		pingpong0[x] = float4(H.real, H.i, 0, 1);
+	}
+}
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{   
+	if (direction == 0) horizontalButterflies(DTid);
+	else if (direction == 1) verticalButterflies(DTid);
+}

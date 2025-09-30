@@ -16,6 +16,12 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FFFTComputeShader, FGlobalShader);
 	
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, butterflyTexture)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, pingpong0)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, pingpong1)
+		SHADER_PARAMETER(int, stage)
+		SHADER_PARAMETER(int, pingpong)
+		SHADER_PARAMETER(int, direction)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

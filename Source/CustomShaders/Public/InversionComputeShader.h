@@ -5,26 +5,22 @@
 #include "ShaderParameterStruct.h"
 #include "GlobalShader.h"
 
-
 #define NUM_THREADS_PER_GROUP_DIMENSION 32
 
 
-struct FSpectrumComputeShader : public FGlobalShader
+struct FInversionComputeShader : public FGlobalShader
 {
 public:
-	DECLARE_GLOBAL_SHADER(FSpectrumComputeShader);
+	DECLARE_GLOBAL_SHADER(FInversionComputeShader);
 
-	SHADER_USE_PARAMETER_STRUCT(FSpectrumComputeShader, FGlobalShader);
+	SHADER_USE_PARAMETER_STRUCT(FInversionComputeShader, FGlobalShader);
 	
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, PositiveSpectrum)
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, NegativeSpectrum)
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, Noise)
-		SHADER_PARAMETER(float, N)
-		SHADER_PARAMETER(float, L)
-		SHADER_PARAMETER(float, A)
-		SHADER_PARAMETER(FVector2f, WindDirection)
-		SHADER_PARAMETER(float, WindSpeed)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, displacement)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, pingpong0)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<FVector4>, pingpong1)
+		SHADER_PARAMETER(int, N)
+		SHADER_PARAMETER(float, pingpong)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

@@ -1,0 +1,41 @@
+#include "/Engine/Private/Common.ush"
+
+#define mod(x, y) (x - y * floor(x / y))
+
+RWTexture2D<float4> displacement;
+RWTexture2D<float4> pingpong0;
+RWTexture2D<float4> pingpong1;
+int N;
+float pingpong;
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{   
+	int2 x = DTid.xy;
+
+	float perms[] = { 1.0, -1.0 };
+	int index = int(mod(int(x.x + x.y), 2));
+	float perm = perms[index];
+
+	if (int(pingpong) == 0)
+	{
+		float h = pingpong0[x].r;
+		displacement[x] = float4(
+			perm * (h / (N * N)),
+			perm * (h / (N * N)),
+			perm * (h / (N * N)),
+			1.0);
+	}
+	else if (int(pingpong) == 1)
+	{
+		float h = pingpong1[x].r;
+		displacement[x] = float4(
+			perm * (h / (N * N)),
+			perm * (h / (N * N)),
+			perm * (h / (N * N)),
+			1.0);
+	}
+}
