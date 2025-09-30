@@ -9,6 +9,11 @@
 
 class CUSTOMSHADERS_API OceanComputeShaderDispatcher
 {
+	struct FFourierComponents
+	{
+		TRefCountPtr<IPooledRenderTarget> Components[3];
+	};
+	
 public:
 	static OceanComputeShaderDispatcher* Get()
 	{
@@ -22,11 +27,11 @@ public:
 	DECLARE_DELEGATE_TwoParams(FOnInitialSpectraReady, TRefCountPtr<IPooledRenderTarget> positiveSpectrumTexture, TRefCountPtr<IPooledRenderTarget> negativeSpectrumTexture);
 	void ComputeInitialSpectra(int N, FOnInitialSpectraReady onComplete);
 	
-	DECLARE_DELEGATE_OneParam(FOnFourierComponentsReady, TRefCountPtr<IPooledRenderTarget> fourierComponentsTexture);
+	DECLARE_DELEGATE_OneParam(FOnFourierComponentsReady, FFourierComponents fourierComponentsTexture);
 	void ComputeFourierComponents(int N, FOnFourierComponentsReady onComplete);
 	
 	DECLARE_DELEGATE_OneParam(FOnDisplacementFieldReady, TRefCountPtr<IPooledRenderTarget> fourierComponentsTexture);
-	void ComputeDisplacement(int N, FOnFourierComponentsReady onComplete, UTextureRenderTarget2D* debugOutput);
+	void ComputeDisplacement(int N, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutX, UTextureRenderTarget2D* displacementOutY, UTextureRenderTarget2D* displacementOutZ);
 
 private:
 	OceanComputeShaderDispatcher() = default;

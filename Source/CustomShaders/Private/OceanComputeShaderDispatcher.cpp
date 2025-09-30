@@ -190,10 +190,10 @@ void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierCom
             	
             FFourierComponentsComputeShader::FParameters params;
             params.N = N;
-            params.L = 1000;
+            params.L = 100;
 
 			static float t = 0.0f;
-			t += 0.01f;
+			t += 0.003f;
             params.t = t;
     
             // Create height texture on GPU
@@ -238,9 +238,11 @@ void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierCom
             		1)
             	);
             });
-            
-            TRefCountPtr<IPooledRenderTarget> output;
-            rdgBuilder.QueueTextureExtraction(fourierComponentsOut_Y, &output);
+
+			FFourierComponents output;
+            rdgBuilder.QueueTextureExtraction(fourierComponentsOut_X, &output.Components[0]);
+            rdgBuilder.QueueTextureExtraction(fourierComponentsOut_Y, &output.Components[1]);
+            rdgBuilder.QueueTextureExtraction(fourierComponentsOut_Z, &output.Components[2]);
 			
             rdgBuilder.Execute();
 			onComplete.ExecuteIfBound(output);
@@ -251,17 +253,17 @@ void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierCom
 }
 
 
-void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnFourierComponentsReady onComplete, UTextureRenderTarget2D* debugOutput)
+void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutXTarget, UTextureRenderTarget2D* displacementOutYTarget, UTextureRenderTarget2D* displacementOutZTarget)
 {
 	FOnFourierComponentsReady onFourierComponentsReady;
 
-	onFourierComponentsReady.BindLambda([this, N, onComplete, debugOutput](TRefCountPtr<IPooledRenderTarget> fourierComponents)
+	onFourierComponentsReady.BindLambda([this, N, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FFourierComponents fourierComponents)
 	{
 		FOnButterflyTextureReady onButterflyTextureReady;
 
-		onButterflyTextureReady.BindLambda([N, fourierComponents, onComplete, debugOutput](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
+		onButterflyTextureReady.BindLambda([N, fourierComponents, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
 		{
-			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, fourierComponents, onComplete, butterflyTexture, debugOutput](FRHICommandListImmediate& rhiCmdList) mutable
+			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, fourierComponents, onComplete, butterflyTexture, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FRHICommandListImmediate& rhiCmdList) mutable
             {
                 FRDGBuilder rdgBuilder(rhiCmdList);
 				TShaderMapRef<FFFTComputeShader> fftCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
@@ -276,81 +278,89 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnFourierComponen
         		
                 FRDGTextureRef butterflyRef = rdgBuilder.RegisterExternalTexture(butterflyTexture);
                 FRDGTextureUAVRef butterflyTextureUAV = rdgBuilder.CreateUAV({butterflyRef});
-        		
-                FRDGTextureRef fourierComponentsRef = rdgBuilder.RegisterExternalTexture(fourierComponents);
-                FRDGTextureUAVRef pingpong0UAV = rdgBuilder.CreateUAV({fourierComponentsRef});
-                
-                FRDGTextureRef pingPong1Texture = rdgBuilder.CreateTexture(textureDesc, TEXT("FFT_PingPong1_Out"));
-                FRDGTextureUAVRef pingPong1Texture_UAV = rdgBuilder.CreateUAV({ pingPong1Texture });
-                FRDGTextureUAVRef pingpong1UAV = pingPong1Texture_UAV;
 
-				enum class FFTDirection { Horizontal, Vertical };
-				const int numStages = log2(N);
-				int pingpong = 0;
+				TRefCountPtr<IPooledRenderTarget> displacementTexturesInternal[] { nullptr, nullptr, nullptr };
+				UTextureRenderTarget2D* displacementTargets[] { displacementOutXTarget, displacementOutYTarget, displacementOutZTarget };
+				FRDGTextureRef displacementTextures[] { 
+					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutX")),
+					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutY")),
+					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutZ"))
+				};
 
-				TArray<FFFTComputeShader::FParameters*> paramList;
-
-				for (auto direction: { FFTDirection::Horizontal, FFTDirection::Vertical })
+				for (int axis = 0; axis < 3; axis++)
 				{
-                    for (int i = 0; i < numStages; i++)
+	                FRDGTextureRef fourierComponentsRef = rdgBuilder.RegisterExternalTexture(fourierComponents.Components[axis]);
+                    FRDGTextureUAVRef pingpong0UAV = rdgBuilder.CreateUAV({fourierComponentsRef});
+                    
+                    FRDGTextureRef pingPong1Texture = rdgBuilder.CreateTexture(textureDesc, TEXT("FFT_PingPong1_Out"));
+                    FRDGTextureUAVRef pingPong1Texture_UAV = rdgBuilder.CreateUAV({ pingPong1Texture });
+                    FRDGTextureUAVRef pingpong1UAV = pingPong1Texture_UAV;
+    
+                    enum class FFTDirection { Horizontal, Vertical };
+                    const int numStages = log2(N);
+                    int pingpong = 0;
+    
+                    for (auto direction: { FFTDirection::Horizontal, FFTDirection::Vertical })
                     {
-                    	FFFTComputeShader::FParameters* params = rdgBuilder.AllocParameters<FFFTComputeShader::FParameters>();
-                    	params->direction = (int)direction;
-                    	params->pingpong0 = pingpong0UAV;
-                    	params->pingpong1 = pingpong1UAV;
-                    	params->stage = i;
-                    	params->pingpong = pingpong % 2;
-                    	params->butterflyTexture = butterflyTextureUAV;
-                    	pingpong++;
-                    	
-                        // Add compute execution step
-                        rdgBuilder.AddPass(
-                            RDG_EVENT_NAME("FFTComputePass"),
-                            params,
-                            ERDGPassFlags::Compute,
-                            [fftCompute, params, N](FRHICommandListImmediate& passRhiCmdList)
-                        {	
-                    		FComputeShaderUtils::Dispatch(passRhiCmdList, fftCompute, *params,
-                            FIntVector(
-                                FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-                                FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-                                1)
-                            );
-                        });
+                        for (int i = 0; i < numStages; i++)
+                        {
+                            FFFTComputeShader::FParameters* params = rdgBuilder.AllocParameters<FFFTComputeShader::FParameters>();
+                            params->direction = (int)direction;
+                            params->pingpong0 = pingpong0UAV;
+                            params->pingpong1 = pingpong1UAV;
+                            params->stage = i;
+                            params->pingpong = pingpong % 2;
+                            params->butterflyTexture = butterflyTextureUAV;
+                            pingpong++;
+                            
+                            // Add compute execution step
+                            rdgBuilder.AddPass(
+                                RDG_EVENT_NAME("FFTComputePass"),
+                                params,
+                                ERDGPassFlags::Compute,
+                                [fftCompute, params, N](FRHICommandListImmediate& passRhiCmdList)
+                            {	
+                                FComputeShaderUtils::Dispatch(passRhiCmdList, fftCompute, *params,
+                                FIntVector(
+                                    FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                    FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                    1)
+                                );
+                            });
+                        }
                     }
+					
+                    FInversionComputeShader::FParameters* inversionParams = rdgBuilder.AllocParameters<FInversionComputeShader::FParameters>();
+                    inversionParams->pingpong0 = pingpong0UAV;
+                    inversionParams->pingpong1 = pingpong1UAV;
+                    inversionParams->N = N;
+                    inversionParams->pingpong = pingpong % 2;
+                    inversionParams->displacement = rdgBuilder.CreateUAV({ displacementTextures[axis] });
+                    
+                    TShaderMapRef<FInversionComputeShader> inversionCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
+                    rdgBuilder.AddPass(
+                    	RDG_EVENT_NAME("InversionComputePass"),
+                    	inversionParams,
+                    	ERDGPassFlags::Compute,
+                    	[inversionParams, inversionCompute, N](FRHICommandListImmediate& passRhiCmdList)
+                    {	
+                    	FComputeShaderUtils::Dispatch(passRhiCmdList, inversionCompute, *inversionParams,
+                    	FIntVector(
+                    		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    		1)
+                    	);
+                    });
 				}
-
-				FRDGTextureRef displacementOut = rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_Out"));
-				FRDGTextureUAVRef displacementOut_UAV = rdgBuilder.CreateUAV({ displacementOut });
 				
-				FInversionComputeShader::FParameters* inversionParams = rdgBuilder.AllocParameters<FInversionComputeShader::FParameters>();
-				inversionParams->pingpong0 = pingpong0UAV;
-				inversionParams->pingpong1 = pingpong1UAV;
-				inversionParams->N = N;
-				inversionParams->pingpong = pingpong % 2;
-				inversionParams->displacement = displacementOut_UAV;
-				
-				TShaderMapRef<FInversionComputeShader> inversionCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
-				rdgBuilder.AddPass(
-					RDG_EVENT_NAME("InversionComputePass"),
-					inversionParams,
-					ERDGPassFlags::Compute,
-					[&](FRHICommandListImmediate& passRhiCmdList)
-				{	
-					FComputeShaderUtils::Dispatch(passRhiCmdList, inversionCompute, *inversionParams,
-					FIntVector(
-						FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-						FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-						1)
-					);
-				});
-                
-                TRefCountPtr<IPooledRenderTarget> output;
-                rdgBuilder.QueueTextureExtraction(displacementOut, &output);
+                rdgBuilder.QueueTextureExtraction(displacementTextures[0], &displacementTexturesInternal[0]);
+                rdgBuilder.QueueTextureExtraction(displacementTextures[1], &displacementTexturesInternal[1]);
+				rdgBuilder.QueueTextureExtraction(displacementTextures[2], &displacementTexturesInternal[2]);
                 rdgBuilder.Execute();
-        		onComplete.ExecuteIfBound(output);
 				
-				rhiCmdList.CopyTexture(output->GetRHI(), debugOutput->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
+				rhiCmdList.CopyTexture(displacementTexturesInternal[0]->GetRHI(), displacementTargets[0]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
+				rhiCmdList.CopyTexture(displacementTexturesInternal[1]->GetRHI(), displacementTargets[1]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
+				rhiCmdList.CopyTexture(displacementTexturesInternal[2]->GetRHI(), displacementTargets[2]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
             });	
 		});
 		

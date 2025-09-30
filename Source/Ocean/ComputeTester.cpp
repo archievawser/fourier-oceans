@@ -32,6 +32,6 @@ void AComputeTester::Fire(UTextureRenderTarget2D* t)
 {
 	//OceanComputeShaderDispatcher::Get()->DrawButterfly(256, Target);
 	//OceanComputeShaderDispatcher::Get()->ComputeFourierComponents(256, Target);
-	OceanComputeShaderDispatcher::Get()->ComputeDisplacement(256, OceanComputeShaderDispatcher::FOnFourierComponentsReady(), Target);
+	OceanComputeShaderDispatcher::Get()->ComputeDisplacement(256, OceanComputeShaderDispatcher::FOnDisplacementFieldReady(), X, Y, Z);
 }
 

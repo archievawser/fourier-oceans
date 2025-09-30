@@ -27,5 +27,11 @@ public:
 	void Fire(UTextureRenderTarget2D* t);
 
 	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
-	UTextureRenderTarget2D* Target;
+	UTextureRenderTarget2D* X;
+	
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	UTextureRenderTarget2D* Y;
+	
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	UTextureRenderTarget2D* Z;
 };
