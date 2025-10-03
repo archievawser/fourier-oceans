@@ -1,7 +1,7 @@
 #include "/Engine/Private/Common.ush"
 
 #define M_PI 3.1415926535897932384626433832795
-#define N 256
+#define N 512
 
 
 RWTexture2D<float4> ButterflyTexture;

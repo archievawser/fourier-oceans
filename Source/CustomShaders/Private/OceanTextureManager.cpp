@@ -1,4 +1,4 @@
-#include "OceanComputeShaderDispatcher.h"
+#include "OceanTextureManager.h"
 
 #include "ButterflyTextureComputeShader.h"
 #include "FFTComputeShader.h"
@@ -7,6 +7,7 @@
 #include "RenderGraphUtils.h"
 #include "InitialSpectraComputeShader.h"
 #include "InversionComputeShader.h"
+#include "DSP/AudioFFT.h"
 #include "Runtime/Engine/Classes/Engine/TextureRenderTarget2D.h"
 
 
@@ -23,7 +24,7 @@ T reverse(T n, size_t b = sizeof(T) * CHAR_BIT)
 }
 
 
-TArray<int> OceanComputeShaderDispatcher::PrecomputeBitReversedIndices(int N)
+TArray<int> OceanTextureManager::PrecomputeBitReversedIndices(int N)
 {
 	TArray<int> reversedIndices;
 	reversedIndices.SetNumUninitialized(N);
@@ -39,21 +40,29 @@ TArray<int> OceanComputeShaderDispatcher::PrecomputeBitReversedIndices(int N)
 }
 
 
-void OceanComputeShaderDispatcher::ComputeButterfly(int N, FOnButterflyTextureReady onComplete)
+void OceanTextureManager::SetSpectrumParameters(const FSpectrumParameters& spectrumParameters)
 {
-	if (mButterflyTextureCache.Contains(N))
-		return (void) onComplete.ExecuteIfBound(mButterflyTextureCache[N]);
+	mSpectrumParameters = spectrumParameters;
+
+	ComputeInitialSpectra(FOnInitialSpectraTexturesReady(), false);
+}
+
+
+void OceanTextureManager::ComputeButterfly(FOnButterflyTextureReady onComplete)
+{
+	if (mButterflyTextureCache.Contains(mSpectrumParameters.N))
+		return (void) onComplete.ExecuteIfBound(mButterflyTextureCache[mSpectrumParameters.N]);
 	
-	ENQUEUE_RENDER_COMMAND(WaveComputeCmd)([this, N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
+	ENQUEUE_RENDER_COMMAND(WaveComputeCmd)([this, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
 	{
 		FRDGBuilder rdgBuilder(rhiCmdList);
 		
 		FButterflyTextureComputeShader::FParameters params;
-		params.N = N;
+		params.N = mSpectrumParameters.N;
 
 		// Create butterfly texture on GPU
 		FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
-			FIntPoint(log2(N), N),
+			FIntPoint(log2(mSpectrumParameters.N), mSpectrumParameters.N),
 			PF_A32B32G32R32F,
 			FClearValueBinding(),
 			TexCreate_UAV
@@ -63,11 +72,11 @@ void OceanComputeShaderDispatcher::ComputeButterfly(int N, FOnButterflyTextureRe
 		params.ButterflyTexture = outTextureUAV;
 
 		// Upload bit-reversed indices to GPU
-		FRDGBufferDesc bitReversedIndicesBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(int), N);
+		FRDGBufferDesc bitReversedIndicesBufferDesc = FRDGBufferDesc::CreateBufferDesc(sizeof(int), mSpectrumParameters.N);
 		FRDGBufferRef bitReversedIndicesBufferRef = rdgBuilder.CreateBuffer(bitReversedIndicesBufferDesc, TEXT("Butterfly_Compute_BRI_Buffer"));
 		params.BitReversedIndices = rdgBuilder.CreateUAV({ bitReversedIndicesBufferRef, PF_R32_SINT });
 
-		TArray<int> bri = PrecomputeBitReversedIndices(N);
+		TArray<int> bri = PrecomputeBitReversedIndices(mSpectrumParameters.N);
 		rdgBuilder.QueueBufferUpload(bitReversedIndicesBufferRef, bri.GetData(), bri.Num() * sizeof(int));
 
 		// Add compute execution step
@@ -81,8 +90,8 @@ void OceanComputeShaderDispatcher::ComputeButterfly(int N, FOnButterflyTextureRe
 		{	
 			FComputeShaderUtils::Dispatch(passRhiCmdList, butterflyCompute, params,
 			FIntVector(
-				FMath::DivideAndRoundUp((int)(log2(N)), NUM_THREADS_PER_GROUP_DIMENSION),
-				FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+				FMath::DivideAndRoundUp((int)(log2(mSpectrumParameters.N)), NUM_THREADS_PER_GROUP_DIMENSION),
+				FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
 				1)
 			);
 		});
@@ -91,25 +100,25 @@ void OceanComputeShaderDispatcher::ComputeButterfly(int N, FOnButterflyTextureRe
 		rdgBuilder.QueueTextureExtraction(outTextureRef, &output);
 		rdgBuilder.Execute();
 		
-		mButterflyTextureCache.Add(N, output);
+		mButterflyTextureCache.Add(mSpectrumParameters.N, output);
 		onComplete.ExecuteIfBound(output);
 	});
 }
 
 
-void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectraReady onComplete)
+void OceanTextureManager::ComputeInitialSpectra(FOnInitialSpectraTexturesReady onComplete, bool useCache)
 {
-	if (mButterflyTextureCache.Contains(N))
-		return (void) onComplete.ExecuteIfBound(mInitialSpectraCache[N].first, mInitialSpectraCache[N].second);
+	if (useCache && mInitialSpectraCache.Contains(mSpectrumParameters.N))
+		return (void) onComplete.ExecuteIfBound(mInitialSpectraCache[mSpectrumParameters.N].first, mInitialSpectraCache[mSpectrumParameters.N].second);
 	
-	ENQUEUE_RENDER_COMMAND(SpectraComputeCmd)([this, N, onComplete](FRHICommandListImmediate& rhiCmdList) mutable 
+	ENQUEUE_RENDER_COMMAND(SpectraComputeCmd)([this, onComplete](FRHICommandListImmediate& rhiCmdList) mutable 
 	{
 		TShaderMapRef<FNoiseComputeShader> noiseComputeShader (GetGlobalShaderMap(GMaxRHIFeatureLevel));
 		FRDGBuilder rdgBuilder(rhiCmdList);
 
 		// Compute noise textures (R,G,B, and A are each individual random 0-1 floats)
 		FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
-			FIntPoint(N, N),
+			FIntPoint(mSpectrumParameters.N, mSpectrumParameters.N),
 			PF_A32B32G32R32F,
 			FClearValueBinding(),
 			TexCreate_UAV
@@ -128,8 +137,8 @@ void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectr
         {	
             FComputeShaderUtils::Dispatch(passRhiCmdList, noiseComputeShader, noiseComputeParams,
             FIntVector(
-            	FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-            	FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+            	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+            	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
             	1)
             );
         });
@@ -137,11 +146,11 @@ void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectr
 		// Compute initial spectra
 		TShaderMapRef<FInitialSpectraComputeShader> spectraComputeShader (GetGlobalShaderMap(GMaxRHIFeatureLevel));
 		FInitialSpectraComputeShader::FParameters spectraComputeParams;
-		spectraComputeParams.N = N;
-		spectraComputeParams.L = 1000;
-		spectraComputeParams.A = 4;
-		spectraComputeParams.WindDirection = FVector2f(1.0f, 1.0f);
-		spectraComputeParams.WindSpeed = 40.0;
+		spectraComputeParams.N = mSpectrumParameters.N;
+		spectraComputeParams.L = mSpectrumParameters.L;
+		spectraComputeParams.A = mSpectrumParameters.A;
+		spectraComputeParams.WindDirection = mSpectrumParameters.WindDirection;
+		spectraComputeParams.WindSpeed = mSpectrumParameters.WindSpeed;
 		spectraComputeParams.Noise = outNoiseUAV;
 
 		FRDGTextureRef outNegativeSpectrum = rdgBuilder.CreateTexture(textureDesc, TEXT("NegativeSpectrum_Compute_Out"));
@@ -160,8 +169,8 @@ void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectr
 		{	
 			FComputeShaderUtils::Dispatch(passRhiCmdList, spectraComputeShader, spectraComputeParams,
 			FIntVector(
-				FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-				FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+				FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+				FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
 				1)
 			);
 		});
@@ -172,33 +181,33 @@ void OceanComputeShaderDispatcher::ComputeInitialSpectra(int N, FOnInitialSpectr
 		rdgBuilder.QueueTextureExtraction(outPositiveSpectrum, &positiveSpectrumOut);
 		rdgBuilder.Execute();
 
-		mInitialSpectraCache.Add(N, { positiveSpectrumOut, negativeSpectrumOut });
+		mInitialSpectraCache.Add(mSpectrumParameters.N, { positiveSpectrumOut, negativeSpectrumOut });
 		onComplete.ExecuteIfBound(positiveSpectrumOut, negativeSpectrumOut);
 	});
 }
 
 
-void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierComponentsReady onComplete)
+void OceanTextureManager::ComputeFourierComponents(float time, FOnFourierComponentsReady onComplete)
 {
-	FOnInitialSpectraReady onInitialSpectraDrawn;
+	FOnInitialSpectraTexturesReady onInitialSpectraDrawn;
 
-	onInitialSpectraDrawn.BindLambda([this, N, onComplete](TRefCountPtr<IPooledRenderTarget> positiveSpectrum, TRefCountPtr<IPooledRenderTarget> negativeSpectrum) 
+	onInitialSpectraDrawn.BindLambda([this, onComplete, time](TRefCountPtr<IPooledRenderTarget> positiveSpectrum, TRefCountPtr<IPooledRenderTarget> negativeSpectrum) 
 	{
-		ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, positiveSpectrum, negativeSpectrum, onComplete](FRHICommandListImmediate& rhiCmdList) mutable
+		ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([this, positiveSpectrum, negativeSpectrum, onComplete, time](FRHICommandListImmediate& rhiCmdList) mutable
         {
             FRDGBuilder rdgBuilder(rhiCmdList);
             	
             FFourierComponentsComputeShader::FParameters params;
-            params.N = N;
-            params.L = 100;
+            params.N = mSpectrumParameters.N;
+            params.L = mSpectrumParameters.L;
 
-			static float t = 0.0f;
-			t += 0.003f;
-            params.t = t;
+			static float t = 0.03f;
+			t += 0.008f;
+            params.t = time;
     
             // Create height texture on GPU
             FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
-            	FIntPoint(N, N),
+            	FIntPoint(mSpectrumParameters.N, mSpectrumParameters.N),
             	PF_A32B32G32R32F,
             	FClearValueBinding(),
             	TexCreate_UAV
@@ -233,8 +242,8 @@ void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierCom
             {	
             	FComputeShaderUtils::Dispatch(passRhiCmdList, fourierComponentsCompute, params,
             	FIntVector(
-            		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-            		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+            		FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+            		FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
             		1)
             	);
             });
@@ -249,28 +258,28 @@ void OceanComputeShaderDispatcher::ComputeFourierComponents(int N, FOnFourierCom
         });
 	});
 
-	ComputeInitialSpectra(N, onInitialSpectraDrawn);
+	ComputeInitialSpectra(onInitialSpectraDrawn);
 }
 
 
-void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutXTarget, UTextureRenderTarget2D* displacementOutYTarget, UTextureRenderTarget2D* displacementOutZTarget)
+void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutXTarget, UTextureRenderTarget2D* displacementOutYTarget, UTextureRenderTarget2D* displacementOutZTarget)
 {
 	FOnFourierComponentsReady onFourierComponentsReady;
 
-	onFourierComponentsReady.BindLambda([this, N, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FFourierComponents fourierComponents)
+	onFourierComponentsReady.BindLambda([this, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FFourierComponents fourierComponents)
 	{
 		FOnButterflyTextureReady onButterflyTextureReady;
 
-		onButterflyTextureReady.BindLambda([N, fourierComponents, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
+		onButterflyTextureReady.BindLambda([this, fourierComponents, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
 		{
-			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([N, fourierComponents, onComplete, butterflyTexture, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FRHICommandListImmediate& rhiCmdList) mutable
+			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([this, fourierComponents, onComplete, butterflyTexture, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FRHICommandListImmediate& rhiCmdList) mutable
             {
                 FRDGBuilder rdgBuilder(rhiCmdList);
 				TShaderMapRef<FFFTComputeShader> fftCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
         
                 // Create height texture on GPU
                 FRDGTextureDesc textureDesc = FRDGTextureDesc::Create2D(
-                    FIntPoint(N, N),
+                    FIntPoint(mSpectrumParameters.N, mSpectrumParameters.N),
                     PF_A32B32G32R32F,
                     FClearValueBinding(),
                     TexCreate_UAV
@@ -297,7 +306,7 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFie
                     FRDGTextureUAVRef pingpong1UAV = pingPong1Texture_UAV;
     
                     enum class FFTDirection { Horizontal, Vertical };
-                    const int numStages = log2(N);
+                    const int numStages = log2(mSpectrumParameters.N);
                     int pingpong = 0;
     
                     for (auto direction: { FFTDirection::Horizontal, FFTDirection::Vertical })
@@ -318,12 +327,12 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFie
                                 RDG_EVENT_NAME("FFTComputePass"),
                                 params,
                                 ERDGPassFlags::Compute,
-                                [fftCompute, params, N](FRHICommandListImmediate& passRhiCmdList)
+                                [fftCompute, params, this](FRHICommandListImmediate& passRhiCmdList)
                             {	
                                 FComputeShaderUtils::Dispatch(passRhiCmdList, fftCompute, *params,
                                 FIntVector(
-                                    FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-                                    FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                    FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                                    FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
                                     1)
                                 );
                             });
@@ -333,7 +342,7 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFie
                     FInversionComputeShader::FParameters* inversionParams = rdgBuilder.AllocParameters<FInversionComputeShader::FParameters>();
                     inversionParams->pingpong0 = pingpong0UAV;
                     inversionParams->pingpong1 = pingpong1UAV;
-                    inversionParams->N = N;
+                    inversionParams->N = mSpectrumParameters.N;
                     inversionParams->pingpong = pingpong % 2;
                     inversionParams->displacement = rdgBuilder.CreateUAV({ displacementTextures[axis] });
                     
@@ -342,12 +351,12 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFie
                     	RDG_EVENT_NAME("InversionComputePass"),
                     	inversionParams,
                     	ERDGPassFlags::Compute,
-                    	[inversionParams, inversionCompute, N](FRHICommandListImmediate& passRhiCmdList)
+                    	[inversionParams, inversionCompute, this](FRHICommandListImmediate& passRhiCmdList)
                     {	
                     	FComputeShaderUtils::Dispatch(passRhiCmdList, inversionCompute, *inversionParams,
                     	FIntVector(
-                    		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
-                    		FMath::DivideAndRoundUp(N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    		FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    		FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
                     		1)
                     	);
                     });
@@ -364,11 +373,11 @@ void OceanComputeShaderDispatcher::ComputeDisplacement(int N, FOnDisplacementFie
             });	
 		});
 		
-		ComputeButterfly(N, onButterflyTextureReady);
+		ComputeButterfly(onButterflyTextureReady);
 	});
 
-	ComputeFourierComponents(N, onFourierComponentsReady);
+	ComputeFourierComponents(time, onFourierComponentsReady);
 }
 
 
-OceanComputeShaderDispatcher* OceanComputeShaderDispatcher::mSingleton;
+OceanTextureManager* OceanTextureManager::mSingleton;

@@ -26,6 +26,8 @@ public:
 	UFUNCTION( BlueprintCallable )
 	void Fire(UTextureRenderTarget2D* t);
 
+	void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	
 	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
 	UTextureRenderTarget2D* X;
 	
@@ -34,4 +36,16 @@ public:
 	
 	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
 	UTextureRenderTarget2D* Z;
+	
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	float L = 1000;
+
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	float A = 4;
+
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	FVector2f WindDirection = FVector2f(1, 1);
+
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	float WindSpeed = 40.f;
 };
