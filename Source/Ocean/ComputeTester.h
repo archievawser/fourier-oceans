@@ -38,6 +38,9 @@ public:
 	UTextureRenderTarget2D* Z;
 	
 	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
+	UTextureRenderTarget2D* Foam;
+	
+	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)
 	float L = 1000;
 
 	UPROPERTY( EditAnywhere, BlueprintReadWrite, Category = Ocean)

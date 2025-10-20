@@ -42,7 +42,7 @@ public:
 	void ComputeFourierComponents(float time, FOnFourierComponentsReady onComplete);
 	
 	DECLARE_DELEGATE_OneParam(FOnDisplacementFieldReady, TRefCountPtr<IPooledRenderTarget> fourierComponentsTexture);
-	void ComputeDisplacement(float time, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutX, UTextureRenderTarget2D* displacementOutY, UTextureRenderTarget2D* displacementOutZ);
+	void ComputeDisplacement(float time, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutX, UTextureRenderTarget2D* displacementOutY, UTextureRenderTarget2D* displacementOutZ, UTextureRenderTarget2D* foamOutTarget);
 
 private:
 	OceanTextureManager() = default;
@@ -56,4 +56,6 @@ private:
 	static TArray<int> PrecomputeBitReversedIndices(int N);
 	
 	static OceanTextureManager* mSingleton;
+
+	static TRefCountPtr<IPooledRenderTarget> mLastFoamTexture;
 };

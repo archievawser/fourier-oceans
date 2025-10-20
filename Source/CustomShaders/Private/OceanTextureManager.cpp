@@ -2,11 +2,13 @@
 
 #include "ButterflyTextureComputeShader.h"
 #include "FFTComputeShader.h"
+#include "FoamComputeShader.h"
 #include "FourierComponentsComputeShader.h"
 #include "NoiseComputeShader.h"
 #include "RenderGraphUtils.h"
 #include "InitialSpectraComputeShader.h"
 #include "InversionComputeShader.h"
+#include "NormalsComputeShader.h"
 #include "DSP/AudioFFT.h"
 #include "Runtime/Engine/Classes/Engine/TextureRenderTarget2D.h"
 
@@ -262,17 +264,17 @@ void OceanTextureManager::ComputeFourierComponents(float time, FOnFourierCompone
 }
 
 
-void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutXTarget, UTextureRenderTarget2D* displacementOutYTarget, UTextureRenderTarget2D* displacementOutZTarget)
+void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldReady onComplete, UTextureRenderTarget2D* displacementOutXTarget, UTextureRenderTarget2D* displacementOutYTarget, UTextureRenderTarget2D* displacementOutZTarget, UTextureRenderTarget2D* foamOutTarget)
 {
 	FOnFourierComponentsReady onFourierComponentsReady;
 
-	onFourierComponentsReady.BindLambda([this, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FFourierComponents fourierComponents)
+	onFourierComponentsReady.BindLambda([this, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget, foamOutTarget](FFourierComponents fourierComponents)
 	{
 		FOnButterflyTextureReady onButterflyTextureReady;
 
-		onButterflyTextureReady.BindLambda([this, fourierComponents, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
+		onButterflyTextureReady.BindLambda([this, fourierComponents, onComplete, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget, foamOutTarget](TRefCountPtr<IPooledRenderTarget> butterflyTexture)
 		{
-			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([this, fourierComponents, onComplete, butterflyTexture, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget](FRHICommandListImmediate& rhiCmdList) mutable
+			ENQUEUE_RENDER_COMMAND(HeightComputeCmd)([this, fourierComponents, onComplete, butterflyTexture, displacementOutXTarget, displacementOutYTarget, displacementOutZTarget, foamOutTarget](FRHICommandListImmediate& rhiCmdList) mutable
             {
                 FRDGBuilder rdgBuilder(rhiCmdList);
 				TShaderMapRef<FFFTComputeShader> fftCompute(GetGlobalShaderMap(GMaxRHIFeatureLevel));
@@ -289,12 +291,15 @@ void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldRe
                 FRDGTextureUAVRef butterflyTextureUAV = rdgBuilder.CreateUAV({butterflyRef});
 
 				TRefCountPtr<IPooledRenderTarget> displacementTexturesInternal[] { nullptr, nullptr, nullptr };
+				TRefCountPtr<IPooledRenderTarget> foamTextureInternal;
 				UTextureRenderTarget2D* displacementTargets[] { displacementOutXTarget, displacementOutYTarget, displacementOutZTarget };
 				FRDGTextureRef displacementTextures[] { 
 					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutX")),
 					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutY")),
 					rdgBuilder.CreateTexture(textureDesc, TEXT("Displacement_OutZ"))
 				};
+
+				FRDGTextureUAVRef displacementTexturesUAV[] { nullptr, nullptr, nullptr };
 
 				for (int axis = 0; axis < 3; axis++)
 				{
@@ -344,7 +349,7 @@ void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldRe
                     inversionParams->pingpong1 = pingpong1UAV;
                     inversionParams->N = mSpectrumParameters.N;
                     inversionParams->pingpong = pingpong % 2;
-                    inversionParams->displacement = rdgBuilder.CreateUAV({ displacementTextures[axis] });
+                    inversionParams->displacement = displacementTexturesUAV[axis] = rdgBuilder.CreateUAV({ displacementTextures[axis] });
                     
                     TShaderMapRef<FInversionComputeShader> inversionCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
                     rdgBuilder.AddPass(
@@ -361,15 +366,59 @@ void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldRe
                     	);
                     });
 				}
+
+				FRDGTextureRef normals = rdgBuilder.CreateTexture(textureDesc, TEXT("Normals_Out"));
+				FNormalsComputeShader::FParameters* normalsParams = rdgBuilder.AllocParameters<FNormalsComputeShader::FParameters>();
+				normalsParams->displacementX = displacementTexturesUAV[0];
+				normalsParams->displacementY = displacementTexturesUAV[2];
+				normalsParams->normals = rdgBuilder.CreateUAV({ normals });
+				
+				TShaderMapRef<FNormalsComputeShader> normalsCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
+                rdgBuilder.AddPass(
+                    RDG_EVENT_NAME("NormalsComputePass"),
+                    normalsParams,
+                    ERDGPassFlags::Compute,
+                    [normalsParams, normalsCompute, this](FRHICommandListImmediate& passRhiCmdList)
+                {	
+                    FComputeShaderUtils::Dispatch(passRhiCmdList, normalsCompute, *normalsParams,
+                    FIntVector(
+                    	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    	1)
+                    );
+                });
+				
+				FRDGTextureRef foamTexture = rdgBuilder.CreateTexture(textureDesc, TEXT("Foam_Out"));
+				FFoamComputeShader::FParameters* foamParams = rdgBuilder.AllocParameters<FFoamComputeShader::FParameters>();
+				foamParams->normals = normalsParams->normals;
+				foamParams->foam = rdgBuilder.CreateUAV({ foamTexture });
+				this->mLastFoamTexture = foamTextureInternal;
+				
+				TShaderMapRef<FFoamComputeShader> foamCompute (GetGlobalShaderMap(GMaxRHIFeatureLevel));
+                rdgBuilder.AddPass(
+                    RDG_EVENT_NAME("FoamComputePass"),
+                    foamParams,
+                    ERDGPassFlags::Compute,
+                    [foamParams, foamCompute, this](FRHICommandListImmediate& passRhiCmdList)
+                {	
+                    FComputeShaderUtils::Dispatch(passRhiCmdList, foamCompute, *foamParams,
+                    FIntVector(
+                    	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    	FMath::DivideAndRoundUp(mSpectrumParameters.N, NUM_THREADS_PER_GROUP_DIMENSION),
+                    	1)
+                    );
+                });
 				
                 rdgBuilder.QueueTextureExtraction(displacementTextures[0], &displacementTexturesInternal[0]);
                 rdgBuilder.QueueTextureExtraction(displacementTextures[1], &displacementTexturesInternal[1]);
 				rdgBuilder.QueueTextureExtraction(displacementTextures[2], &displacementTexturesInternal[2]);
+				rdgBuilder.QueueTextureExtraction(foamTexture, &foamTextureInternal);
                 rdgBuilder.Execute();
 				
 				rhiCmdList.CopyTexture(displacementTexturesInternal[0]->GetRHI(), displacementTargets[0]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
 				rhiCmdList.CopyTexture(displacementTexturesInternal[1]->GetRHI(), displacementTargets[1]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
 				rhiCmdList.CopyTexture(displacementTexturesInternal[2]->GetRHI(), displacementTargets[2]->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
+				rhiCmdList.CopyTexture(foamTextureInternal->GetRHI(), foamOutTarget->GetRenderTargetResource()->GetTextureRHI(), FRHICopyTextureInfo());
             });	
 		});
 		
@@ -381,3 +430,4 @@ void OceanTextureManager::ComputeDisplacement(float time, FOnDisplacementFieldRe
 
 
 OceanTextureManager* OceanTextureManager::mSingleton;
+TRefCountPtr<IPooledRenderTarget> OceanTextureManager::mLastFoamTexture;

@@ -45,7 +45,7 @@ void AComputeTester::Fire(UTextureRenderTarget2D* t)
 	//OceanComputeShaderDispatcher::Get()->ComputeFourierComponents(256, Target);
 
 	GEngine->AddOnScreenDebugMessage(INDEX_NONE, 10.f, FColor::Red, FString::FromInt(FDateTime::Now().GetMillisecond() / 1000.f));
-	OceanTextureManager::Get()->ComputeDisplacement(UGameplayStatics::GetRealTimeSeconds(GetWorld()) + 10000.f, OceanTextureManager::FOnDisplacementFieldReady(), X, Y, Z);
+	OceanTextureManager::Get()->ComputeDisplacement(UGameplayStatics::GetRealTimeSeconds(GetWorld()) + 10000.f, OceanTextureManager::FOnDisplacementFieldReady(), X, Y, Z, Foam);
 }
 
 

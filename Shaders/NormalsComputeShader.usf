@@ -1,0 +1,20 @@
+#include "/Engine/Private/Common.ush"
+
+#define mod(x, y) (x - y * floor(x / y))
+
+RWTexture2D<float4> displacementX;
+RWTexture2D<float4> displacementY;
+RWTexture2D<float4> normals;
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainComputeShader(uint3 Gid : SV_GroupID, //atm: -, 0...256, - in rows (Y)        --> current group index (dispatched by c++)
+					   uint3 DTid : SV_DispatchThreadID, //atm: 0...256 in rows & columns (XY)   --> "global" thread id
+					   uint3 GTid : SV_GroupThreadID, //atm: 0...256, -,- in columns (X)      --> current threadId in group / "local" threadId
+					   uint GI : SV_GroupIndex)            //atm: 0...256 in columns (X)           --> "flattened" index of a thread within a group)
+{
+	normals[DTid.xy] = float4(
+		(displacementX[DTid.xy + int2(1, 0)].r - displacementX[DTid.xy - int2(1, 0)].r) / (2.0f / 512.0f),
+		(displacementY[DTid.xy + int2(0, 1)].r - displacementY[DTid.xy - int2(0, 1)].r) / (2.0f / 512.0f),
+		(displacementY[DTid.xy + int2(1, 0)].r - displacementY[DTid.xy - int2(1, 0)].r) / (2.0f / 512.0f),
+		1.0);
+}
