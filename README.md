@@ -9,6 +9,5 @@
 - [ ] Add foam
 - [ ] Add buoyancy
 
+<img width="1746" height="1219" alt="image" src="https://github.com/user-attachments/assets/bb95b313-def4-4af1-8f3f-44e2c8d3e21c" />
 <img alt="image" src="LuhCalmPreview.png" />
-<img width="1606" height="1258" alt="image" src="https://github.com/user-attachments/assets/069ca972-c222-4374-8ac2-d37b5797fc5e" />
-<img width="1766" height="806" alt="image" src="https://github.com/user-attachments/assets/de4b0de8-037b-42a9-a8a9-d3da254c7c71" />
