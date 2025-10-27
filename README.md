@@ -10,5 +10,5 @@
 - [ ] Add foam
 - [ ] Add buoyancy
 
-<img width="1746" height="929" alt="image" src="https://github.com/user-attachments/assets/a1870925-f799-4781-8988-382227c3f4f1" />
-<img width="1680" height="1066" alt="image" src="https://github.com/user-attachments/assets/075cbe46-3cb1-4715-8773-51b46e499ef5" />
+<img width="1746" height="929" alt="image" src="https://imgur.com/3gHvz1x" />
+<img width="1680" height="1066" alt="image" src="https://imgur.com/gmunjjx" />
