@@ -11,7 +11,6 @@
 - [ ] Add foam
 - [ ] Add buoyancy
 
-(will look better soon)
-<img width="1680" height="1066" alt="image" src="https://i.imgur.com/gmunjjx.png" />
+(will look actually good with proper water shader)
 <img width="1750" height="1077" alt="image" src="https://github.com/user-attachments/assets/51a2e171-32b9-4a85-b2b9-2a02e94693d3" />
 <img width="1733" height="1234" alt="image" src="https://github.com/user-attachments/assets/04d8712b-dbbc-443f-8f84-a9c1f4f7c4f4" />
